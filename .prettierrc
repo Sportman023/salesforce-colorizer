@@ -1,0 +1,25 @@
+{
+  "bracketSpacing": true,
+  "singleQuote": true,
+  "overrides": [
+    {
+      "files": "*.ts",
+      "options": {
+        "tabWidth": 2,
+        "printWidth": 140,
+        "proseWrap": "always",
+        "semi": true,
+        "trailingComma": "es5",
+        "arrowParens": "avoid",
+        "operator-linebreak": "after"
+      }
+    },
+    {
+      "files": "*.css",
+      "options": {
+        "tabWidth": 4,
+        "parser": "css"
+      }
+    }
+  ]
+}
