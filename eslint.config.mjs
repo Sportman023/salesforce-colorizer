@@ -100,7 +100,8 @@ export default [
       'no-whitespace-before-property': ['error'],
       'object-curly-spacing': ['error', 'always'],
       'operator-assignment': ['error', 'always'],
-      'operator-linebreak': ['error', 'before'],
+      // Matches Prettier: binary operators and '=' at line end, ternary operators at line start.
+      'operator-linebreak': ['error', 'after', { overrides: { '?': 'before', ':': 'before' } }],
       'semi-spacing': [
         'error',
         {

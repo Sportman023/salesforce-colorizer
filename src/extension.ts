@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 const EXTENSION_ID = 'salesforce-colorizer';
 const COLOR_CUSTOMIZATIONS = 'workbench.colorCustomizations';
 const SF_CONFIG_RELATIVE_PATH = '.sf/config.json';
+const APPLIED_COLORS_STATE_KEY = 'appliedColors';
 
 type ColorCustomizations = Record<string, unknown>;
 
@@ -13,24 +14,18 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outputChannel);
   outputChannel.info('Activated.');
 
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-
-  if (!workspaceFolder) {
-    outputChannel.error('Workspace folder not found.');
-    return;
-  }
-
-  const sfConfigUri = vscode.Uri.joinPath(workspaceFolder.uri, SF_CONFIG_RELATIVE_PATH);
-  const update = () => updateTheme(sfConfigUri);
+  const update = () => updateTheme(context.workspaceState);
 
   // Survives atomic writes (rename) of the file and its creation/deletion, unlike fs.watch.
-  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceFolder, SF_CONFIG_RELATIVE_PATH));
+  // A glob pattern covers every workspace folder, including folders added later.
+  const watcher = vscode.workspace.createFileSystemWatcher(`**/${SF_CONFIG_RELATIVE_PATH}`);
   watcher.onDidChange(update);
   watcher.onDidCreate(update);
   watcher.onDidDelete(update);
 
   context.subscriptions.push(
     watcher,
+    vscode.workspace.onDidChangeWorkspaceFolders(update),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration(EXTENSION_ID)) {
         update();
@@ -41,13 +36,13 @@ export function activate(context: vscode.ExtensionContext) {
   update();
 }
 
-async function readTargetOrg(sfConfigUri: vscode.Uri): Promise<string | undefined> {
+async function readTargetOrg(folder: vscode.WorkspaceFolder): Promise<string | undefined> {
+  const sfConfigUri = vscode.Uri.joinPath(folder.uri, SF_CONFIG_RELATIVE_PATH);
   let content: string;
 
   try {
     content = new TextDecoder().decode(await vscode.workspace.fs.readFile(sfConfigUri));
   } catch {
-    outputChannel.warn(`${sfConfigUri.fsPath} not found.`);
     return undefined;
   }
 
@@ -59,34 +54,57 @@ async function readTargetOrg(sfConfigUri: vscode.Uri): Promise<string | undefine
   return typeof targetOrg === 'string' ? targetOrg : undefined;
 }
 
-async function updateTheme(sfConfigUri: vscode.Uri) {
-  try {
-    const targetOrg = await readTargetOrg(sfConfigUri);
+async function findOrgToHighlight(keywords: string[]): Promise<string | undefined> {
+  // workbench.colorCustomizations is window-scoped, so in a multi-root workspace
+  // the window is highlighted if any folder targets a matching org.
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    try {
+      const targetOrg = await readTargetOrg(folder);
+      const orgName = targetOrg?.toLowerCase();
 
-    if (!targetOrg) {
-      outputChannel.warn('No default Salesforce org set.');
+      if (orgName && keywords.some(keyword => orgName.includes(keyword.toLowerCase()))) {
+        return targetOrg;
+      }
+    } catch (error) {
+      outputChannel.error(`Failed to read ${SF_CONFIG_RELATIVE_PATH} in ${folder.name}: ${error}`);
     }
+  }
 
+  return undefined;
+}
+
+async function updateTheme(workspaceState: vscode.Memento) {
+  try {
     const colorizerConfig = vscode.workspace.getConfiguration(EXTENSION_ID);
     const keywords = colorizerConfig.get<string[]>('highlightKeywords', []).filter(keyword => keyword.trim());
     const customizationKeys = colorizerConfig.get<string[]>('workbenchColorCustomizations', []);
     const highlightColor = colorizerConfig.get<string>('highlightColor');
 
-    const orgName = targetOrg?.toLowerCase() ?? '';
-    const toHighlight = !!orgName && !!highlightColor && keywords.some(keyword => orgName.includes(keyword.toLowerCase()));
+    const orgToHighlight = highlightColor ? await findOrgToHighlight(keywords) : undefined;
+    const desired: Record<string, string> = {};
+
+    if (orgToHighlight && highlightColor) {
+      customizationKeys.forEach(key => (desired[key] = highlightColor));
+    }
 
     // Only touch the workspace-level value so user/global customizations are not copied into the workspace settings.
     const workbenchConfig = vscode.workspace.getConfiguration();
     const current = workbenchConfig.inspect<ColorCustomizations>(COLOR_CUSTOMIZATIONS)?.workspaceValue ?? {};
     const updated: ColorCustomizations = { ...current };
 
-    customizationKeys.forEach(key => {
-      if (toHighlight) {
-        updated[key] = highlightColor;
-      } else {
+    // Remove only colors this extension applied itself (and the user has not changed since),
+    // so manual customizations and keys dropped from the settings are handled correctly.
+    const previouslyApplied =
+      workspaceState.get<Record<string, string>>(APPLIED_COLORS_STATE_KEY) ??
+      guessAppliedColors(current, customizationKeys, highlightColor);
+    Object.entries(previouslyApplied).forEach(([key, color]) => {
+      if (!(key in desired) && updated[key] === color) {
         delete updated[key];
       }
     });
+
+    Object.assign(updated, desired);
+    await workspaceState.update(APPLIED_COLORS_STATE_KEY, desired);
 
     if (JSON.stringify(current) === JSON.stringify(updated)) {
       return;
@@ -99,10 +117,21 @@ async function updateTheme(sfConfigUri: vscode.Uri) {
       vscode.ConfigurationTarget.Workspace
     );
 
-    outputChannel.info(toHighlight ? `Highlighted org "${targetOrg}".` : 'Highlight removed.');
+    outputChannel.info(orgToHighlight ? `Highlighted org "${orgToHighlight}".` : 'Highlight removed.');
   } catch (error) {
     outputChannel.error(`Error: ${error}`);
   }
+}
+
+// Versions before tracking the applied colors left no state: treat configured keys with the highlight color as ours.
+function guessAppliedColors(current: ColorCustomizations, keys: string[], color: string | undefined): Record<string, string> {
+  const applied: Record<string, string> = {};
+
+  if (color) {
+    keys.filter(key => current[key] === color).forEach(key => (applied[key] = color));
+  }
+
+  return applied;
 }
 
 export function deactivate() {}

@@ -29,3 +29,9 @@ Example configuration:
     "salesforce-colorizer.highlightColor": "#570000b2"
 }
 ```
+
+## Notes
+
+-   Colors are written to the workspace settings (`.vscode/settings.json`, or the `.code-workspace` file in a multi-root workspace). Comments in the file are preserved.
+-   In a multi-root workspace the window is highlighted if any folder targets a matching org.
+-   When the highlight is removed, only the colors applied by the extension are deleted; manual customizations are kept.
