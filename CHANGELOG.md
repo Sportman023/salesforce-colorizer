@@ -4,7 +4,7 @@ All notable changes to the "salesforce-colorizer" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-30
 
 - Apply the highlight on startup and when extension settings change.
 - Reliable watching of `.sf/config.json` (atomic writes, creation, deletion).

@@ -2,7 +2,7 @@
   "name": "salesforce-colorizer",
   "displayName": "Salesforce Colorizer",
   "description": "Highlights the VS Code UI when the default Salesforce org matches configured keywords (e.g. Production)",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.97.2"
   },
