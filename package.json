@@ -10,6 +10,10 @@
     "Other"
   ],
   "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sportman023/salesforce-colorizer.git"
+  },
   "main": "./out/extension.js",
   "activationEvents": [
     "workspaceContains:**/.sf/config.json",
@@ -55,7 +59,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "rm -rf out && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
@@ -71,8 +75,9 @@
     "@typescript-eslint/parser": "^8.22.0",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^4.0.0",
     "eslint": "^9.19.0",
-    "typescript": "^5.7.3",
-    "prettier": "^3.5.2"
+    "prettier": "^3.5.2",
+    "typescript": "^5.7.3"
   }
 }
