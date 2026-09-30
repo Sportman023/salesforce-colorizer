@@ -1,125 +1,108 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
 
-const ROOT_PATH = getRootPath();
-const OUTPUT_CHANNEL = vscode.window.createOutputChannel('Salesforce Colorizer', { log: true });
+const EXTENSION_ID = 'salesforce-colorizer';
+const COLOR_CUSTOMIZATIONS = 'workbench.colorCustomizations';
+const SF_CONFIG_RELATIVE_PATH = '.sf/config.json';
+
+type ColorCustomizations = Record<string, unknown>;
+
+let outputChannel: vscode.LogOutputChannel;
 
 export function activate(context: vscode.ExtensionContext) {
-  OUTPUT_CHANNEL.info('Activated.');
+  outputChannel = vscode.window.createOutputChannel('Salesforce Colorizer', { log: true });
+  context.subscriptions.push(outputChannel);
+  outputChannel.info('Activated.');
 
-  if (!ROOT_PATH) {
-    OUTPUT_CHANNEL.error('Root path not found.');
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+  if (!workspaceFolder) {
+    outputChannel.error('Workspace folder not found.');
     return;
   }
 
-  const sfConfigPath = path.join(ROOT_PATH, '.sf', 'config.json');
+  const sfConfigUri = vscode.Uri.joinPath(workspaceFolder.uri, SF_CONFIG_RELATIVE_PATH);
+  const update = () => updateTheme(sfConfigUri);
 
-  if (!fs.existsSync(sfConfigPath)) {
-    OUTPUT_CHANNEL.error(`${sfConfigPath} not found.`);
-    return;
-  }
+  // Survives atomic writes (rename) of the file and its creation/deletion, unlike fs.watch.
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceFolder, SF_CONFIG_RELATIVE_PATH));
+  watcher.onDidChange(update);
+  watcher.onDidCreate(update);
+  watcher.onDidDelete(update);
 
-  fs.watch(sfConfigPath, eventType => {
-    if (eventType === 'change') {
-      updateTheme();
-    }
-  });
+  context.subscriptions.push(
+    watcher,
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration(EXTENSION_ID)) {
+        update();
+      }
+    })
+  );
+
+  update();
 }
 
-function getRootPath() {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  return workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : undefined;
-}
-
-function updateTheme() {
-  if (!ROOT_PATH) {
-    OUTPUT_CHANNEL.error('Root path not found.');
-    return;
-  }
+async function readTargetOrg(sfConfigUri: vscode.Uri): Promise<string | undefined> {
+  let content: string;
 
   try {
-    const sfConfigFilePath = path.join(ROOT_PATH, '.sf', 'config.json');
-    const sfConfigFile = fs.readFileSync(sfConfigFilePath, 'utf8');
+    content = new TextDecoder().decode(await vscode.workspace.fs.readFile(sfConfigUri));
+  } catch {
+    outputChannel.warn(`${sfConfigUri.fsPath} not found.`);
+    return undefined;
+  }
 
-    if (!sfConfigFile) {
-      return;
-    }
+  if (!content.trim()) {
+    return undefined;
+  }
 
-    const sfConfig = JSON.parse(sfConfigFile);
-    console.log(sfConfig);
-    const targetOrg = sfConfig['target-org'];
+  const targetOrg = JSON.parse(content)['target-org'];
+  return typeof targetOrg === 'string' ? targetOrg : undefined;
+}
+
+async function updateTheme(sfConfigUri: vscode.Uri) {
+  try {
+    const targetOrg = await readTargetOrg(sfConfigUri);
 
     if (!targetOrg) {
-      OUTPUT_CHANNEL.error('No default Salesforce org set.');
-      return;
+      outputChannel.warn('No default Salesforce org set.');
     }
 
-    const colorizerConfig = vscode.workspace.getConfiguration('salesforce-colorizer');
-    const userKeywords: string[] | undefined = colorizerConfig.get('highlightKeywords');
+    const colorizerConfig = vscode.workspace.getConfiguration(EXTENSION_ID);
+    const keywords = colorizerConfig.get<string[]>('highlightKeywords', []).filter(keyword => keyword.trim());
+    const customizationKeys = colorizerConfig.get<string[]>('workbenchColorCustomizations', []);
+    const highlightColor = colorizerConfig.get<string>('highlightColor');
 
-    if (!userKeywords) {
-      OUTPUT_CHANNEL.error('No highlight keywords set.');
-      return;
-    }
+    const orgName = targetOrg?.toLowerCase() ?? '';
+    const toHighlight = !!orgName && !!highlightColor && keywords.some(keyword => orgName.includes(keyword.toLowerCase()));
 
-    const userWorkbenchColorCustomizations: string[] | undefined = colorizerConfig.get('workbenchColorCustomizations');
-    if (!userWorkbenchColorCustomizations) {
-      OUTPUT_CHANNEL.error('No Workbench Color Customizations set.');
-      return;
-    }
+    // Only touch the workspace-level value so user/global customizations are not copied into the workspace settings.
+    const workbenchConfig = vscode.workspace.getConfiguration();
+    const current = workbenchConfig.inspect<ColorCustomizations>(COLOR_CUSTOMIZATIONS)?.workspaceValue ?? {};
+    const updated: ColorCustomizations = { ...current };
 
-    const vsSettingsFilePath = path.join(ROOT_PATH, '.vscode', 'settings.json');
-
-    if (!fs.existsSync(vsSettingsFilePath)) {
-      OUTPUT_CHANNEL.error(`${vsSettingsFilePath} not found.`);
-      return;
-    }
-
-    const vsSettingsFile = fs.readFileSync(vsSettingsFilePath, 'utf8');
-
-    if (!vsSettingsFile) {
-      OUTPUT_CHANNEL.error(`${vsSettingsFilePath} not found or empty.`);
-      return;
-    }
-
-    const highlightColor: string | undefined = colorizerConfig.get('highlightColor');
-
-    if (highlightColor === undefined) {
-      OUTPUT_CHANNEL.error('No highlightColor set.');
-      return;
-    }
-
-    const toHighlight = userKeywords.some(keyword => targetOrg.toLowerCase().includes(keyword.toLowerCase()));
-
-    const vsSettings = JSON.parse(vsSettingsFile);
-
-    if (!vsSettings['workbench.colorCustomizations']) {
-      vsSettings['workbench.colorCustomizations'] = {};
-    }
-
-    const wbColorCustomizations = vsSettings['workbench.colorCustomizations'];
-
-    const color = toHighlight ? highlightColor : undefined;
-
-    userWorkbenchColorCustomizations.forEach(setting => {
-      wbColorCustomizations[setting] = color;
+    customizationKeys.forEach(key => {
+      if (toHighlight) {
+        updated[key] = highlightColor;
+      } else {
+        delete updated[key];
+      }
     });
 
-    fs.writeFileSync(vsSettingsFilePath, JSON.stringify(vsSettings, null, 4));
+    if (JSON.stringify(current) === JSON.stringify(updated)) {
+      return;
+    }
+
+    // The configuration API edits .vscode/settings.json in place: it keeps comments and creates the file if needed.
+    await workbenchConfig.update(
+      COLOR_CUSTOMIZATIONS,
+      Object.keys(updated).length ? updated : undefined,
+      vscode.ConfigurationTarget.Workspace
+    );
+
+    outputChannel.info(toHighlight ? `Highlighted org "${targetOrg}".` : 'Highlight removed.');
   } catch (error) {
-    OUTPUT_CHANNEL.error(`Error:  ${error}`);
+    outputChannel.error(`Error: ${error}`);
   }
 }
 
-export function deactivate() {
-  if (!ROOT_PATH) {
-    OUTPUT_CHANNEL.error('Root path not found.');
-    return;
-  }
-
-  const sfConfigPath = path.join(ROOT_PATH, '.sf', 'config.json');
-  if (fs.existsSync(sfConfigPath)) {
-    fs.unwatchFile(sfConfigPath);
-  }
-}
+export function deactivate() {}

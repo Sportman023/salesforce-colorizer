@@ -26,9 +26,7 @@ export default [
       ],
 
       curly: 'warn',
-      eqeqeq: 'warn',
       'no-throw-literal': 'warn',
-      semi: 'error',
       indent: ['error', 2],
       'linebreak-style': ['error', 'unix'],
       quotes: ['error', 'single'],
