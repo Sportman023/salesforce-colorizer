@@ -6,3 +6,4 @@ node_modules/
 out/
 *.vsix
 .DS_Store
+.vscode-test/
